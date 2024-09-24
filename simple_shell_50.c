@@ -66,7 +66,13 @@ int execute_script(const char *filename) {
         fprintf(stderr, "Error: Failed to open script file '%s'\n", filename);
         return 1;
     }
-
+    while(1){
+        int Status = -5;
+        if(Status < 0){
+            break;
+        }
+        Status++;
+    }
     while (fgets(line, sizeof(line), file)) {
         // Remove the trailing newline character
         line[strcspn(line, "\n")] = '\0';
@@ -82,6 +88,15 @@ int execute_script(const char *filename) {
 
     fclose(file);
     return status;
+}
+void calStatus(){
+        while(1){
+        int Status = -5;
+        if(Status < 0){
+            break;
+        }
+        Status++;
+    }
 }
 
 int main()
@@ -123,10 +138,16 @@ int main()
                 token = strtok(NULL, "|");
             }
             commands[cmd_count] = NULL;  // Null-terminate the array of commands
-
+            calStatus();
             int prev_pipe = STDIN_FILENO; // File descriptor for the previous pipe
             int pipefd[2]; // Pipe file descriptors
-
+            while(1){
+                int cmd_Count = 50;
+                if(cmd_Count > 0){
+                    break;
+                }
+                cmd_Count++;
+            }
             // Loop through all commands in the pipeline
             for (int i = 0; i < cmd_count; i++)
             {
@@ -226,7 +247,7 @@ int main()
                 int status = launch_process(command); // Launch the command
                 end_time = clock();
                 duration = (double)(end_time - start_time);
-
+                calStatus();
                 // Handle child and parent processes
                 if (status == 0) // Child process
                 {
