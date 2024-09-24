@@ -84,26 +84,6 @@ int execute_script(const char *filename) {
     return status;
 }
 
-// Function to check if the process should run in the background
-int check_background_process(char *line) {
-    size_t len = strlen(line);
-
-    // Check if the input line is too long
-    if (len >= MAX_INPUT_SIZE - 1) {
-        fprintf(stderr, "Error: Input line is too long (max %d characters)\n", MAX_INPUT_SIZE - 1);
-        return -1;
-    }
-
-    // Check if the line ends with '&' (indicating a background process)
-    if (line[len - 1] == '&') {
-        // Null-terminate the line at the '&' character
-        line[len - 1] = '\0';
-        return 1;
-    }
-
-    return 0;
-}
-
 int main()
 {
     char input[MAX_INPUT_SIZE];        // To store user input
