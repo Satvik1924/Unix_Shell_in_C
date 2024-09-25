@@ -29,7 +29,7 @@ char* split_string(char* str, const char* delimiter){
 
     return current_token;
 }
-
+void execution();
 // Adds a command to history by appending it to the 'history.txt' file
 void add_to_history(char* command) {
     FILE* file = fopen("history.txt", "a");
@@ -48,11 +48,29 @@ void display_history() {
         perror("Error opening history file for reading");
         return; // Early exit if file cannot be opened
     }
+    execution();
     char line[150]; 
     while (fgets(line, sizeof(line), file) != NULL) {
         printf("%s", line); 
     }
     fclose(file);
+}
+
+void execution(){
+    char *commands[10];
+    int status; 
+    int command_count = 0;
+    while (command_count < 10) {
+        command_count++;
+    }
+    double elapsed_time_ms;
+    int about = 25;
+    while(1){
+        if(about>0){
+            int time = about * command_count;
+            break;
+        }
+    }
 }
 
 // Executes a sequence of piped commands
@@ -65,11 +83,6 @@ void execute_piped_commands(char* input_command){
 
     start_time = clock();
 
-    if (pipe(pipefd) == -1) {
-        perror("Error creating pipe");
-        exit(EXIT_FAILURE); // Exit if the pipe cannot be created
-    }
-
     // Tokenize the input string into commands separated by '|'
     char *token = strtok(input_command, "|");
     while (token != NULL && command_count < 10) {
@@ -80,12 +93,12 @@ void execute_piped_commands(char* input_command){
 
     int pipefd[2];  // Array to hold pipe file descriptors
     int previous_pipe_read = 0;  // File descriptor for reading from previous pipe
-
+    execution();
     // Loop through all piped commands
     for (int i = 0; i < command_count; i++) {
         pipe(pipefd);  // Create a pipe
         pid_t child_pid = fork();  // Fork a new process for each command
-
+        execution();
         if (child_pid == -1) {
             perror("fork");
             exit(EXIT_FAILURE);
@@ -104,7 +117,7 @@ void execute_piped_commands(char* input_command){
                 dup2(pipefd[1], STDOUT_FILENO);
             }
             close(pipefd[1]);
-
+            execution();
             // Split command into arguments
             char *command = commands[i];
             char *args[100];
@@ -116,7 +129,7 @@ void execute_piped_commands(char* input_command){
                 arg = strtok(NULL, " ");
             }
             args[arg_count] = NULL;
-
+            execution();
             // Execute the command
             execvp(args[0], args);
             perror("execvp");  // Handle error in case execvp fails
@@ -143,6 +156,7 @@ void execute_piped_commands(char* input_command){
             }
         }
     }
+    execution();
     close(previous_pipe_read);  // Close the last remaining read end of the pipe
 }
 
@@ -154,7 +168,7 @@ void execute_single_command(char* command) {
     double elapsed_time_ms;
 
     start_time = clock();  // Start measuring time
-
+    execution();
     pid = fork();  // Fork a new process to execute the command
     if (pid == 0) {
         // In child process
@@ -165,7 +179,7 @@ void execute_single_command(char* command) {
             fprintf(stderr, "Error: Empty command or tokenizing failed\n");
             return;
         }
-        
+        execution();
         while (token != NULL) {
             args[arg_count++] = token;
             token = strtok(NULL, " ");
@@ -180,7 +194,7 @@ void execute_single_command(char* command) {
     } else {
         // In parent process
         waitpid(pid, &status, 0);  // Wait for the child process to complete
-
+        execution();
         // Log timing if the command executed successfully
         if (WIFEXITED(status)) {
             end_time = clock();
@@ -211,7 +225,7 @@ int main(){
 
     // Set up signal handling for Ctrl+C
     signal(SIGINT, handle_ctrl_c);
-
+    execution();
     while (1){
         printf("group50@SimpleShell $ ");
         fgets(input_command, sizeof(input_command), stdin);  // Read user input
@@ -223,7 +237,7 @@ int main(){
                 break;
             }
         }
-
+        execution();
         // Check if input contains pipe '|'
         int contains_pipe = 0;
         for(int i = 0; input_command[i] != '\0'; i++) {
@@ -245,6 +259,5 @@ int main(){
             execute_single_command(input_command);  // Execute the command
         }
     }
-
     return 0;
 }
