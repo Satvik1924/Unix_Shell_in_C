@@ -2,306 +2,249 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <signal.h>
 
-#define MAX_INPUT_SIZE 1024
-#define MAX_ARGS 64
-#define MAX_PIPES 4
+// Splits a string based on the provided delimiter
+char* split_string(char* str, const char* delimiter){
+    static char* next_token = NULL;
 
-// Structure to store command history
-typedef struct
-{
-    char *command;      // The command executed
-    char *full_command; // The full input including arguments
-    int pid;            // Process ID of the command
-    clock_t start_time, end_time; // Start and end times of the command execution
-    double duration;    // Duration of the command execution
-} history;
+    if (str != NULL)
+        next_token = str;
 
-// Function to parse the user input into a command and its arguments
-void parse_input(char *input, char *command, char **args) {
-    char *token;
-    int arg_count = 0;
+    if (next_token == NULL)
+        return NULL;
 
-    // Tokenize the input string based on whitespace
-    token = strtok(input, " \t\n");
+    char* current_token = next_token;
+    char* token_end = strpbrk(next_token, delimiter);
 
-    while (token != NULL && arg_count < MAX_ARGS - 1) {
-        args[arg_count++] = token;
-        token = strtok(NULL, " \t\n");
+    if (token_end != NULL) {
+        *token_end = '\0';  // Terminate current token
+        next_token = token_end + 1;  // Move to the next token
+    } else {
+        next_token = NULL;
     }
 
-    // Null-terminate the argument list
-    args[arg_count] = NULL;
-
-    // Copy the first argument (command) to the command buffer
-    strcpy(command, args[0]);
+    return current_token;
 }
 
-// Function to create a new process
-int create_new_process(char *command)
-{
-    // Fork a child process
-    pid_t pid = fork();
-    return pid;
-}
-
-// Function to launch a new process
-int launch_process(char *command)
-{
-    // Create a new process by calling create_new_process()
-    int status = create_new_process(command);
-    return status;
-}
-
-// Function to execute commands from a script file
-int execute_script(const char *filename) {
-    int status = 0;
-    FILE *file = NULL;
-    char line[MAX_INPUT_SIZE];
-
-    file = fopen(filename, "r");
-    if (!file) {
-        fprintf(stderr, "Error: Failed to open script file '%s'\n", filename);
-        return 1;
+// Adds a command to history by appending it to the 'history.txt' file
+void add_to_history(char* command) {
+    FILE* file = fopen("history.txt", "a");
+    if (file == NULL) {
+        perror("Error opening history file for appending");
+        return; // Early exit if file cannot be opened
     }
-    while(1){
-        int Status = -5;
-        if(Status < 0){
-            break;
-        }
-        Status++;
-    }
-    while (fgets(line, sizeof(line), file)) {
-        // Remove the trailing newline character
-        line[strcspn(line, "\n")] = '\0';
-
-        // Execute the line as a command
-        status = launch_process(line);
-        if (status != 0) {
-            fprintf(stderr, "Error: Command '%s' failed with status %d\n", line, status);
-            fclose(file);
-            return status;
-        }
-    }
-
+    fprintf(file, "%s\n", command); 
     fclose(file);
-    return status;
 }
-void calStatus(){
-        while(1){
-        int Status = -5;
-        if(Status < 0){
-            break;
+
+// Displays the command history stored in 'history.txt'
+void display_history() {
+    FILE* file = fopen("history.txt", "r");
+    if (file == NULL) {
+        perror("Error opening history file for reading");
+        return; // Early exit if file cannot be opened
+    }
+    char line[150]; 
+    while (fgets(line, sizeof(line), file) != NULL) {
+        printf("%s", line); 
+    }
+    fclose(file);
+}
+
+// Executes a sequence of piped commands
+void execute_piped_commands(char* input_command){
+    char *commands[10];
+    int status;
+    int command_count = 0;
+    clock_t start_time, end_time;
+    double elapsed_time_ms;
+
+    start_time = clock();
+
+    if (pipe(pipefd) == -1) {
+        perror("Error creating pipe");
+        exit(EXIT_FAILURE); // Exit if the pipe cannot be created
+    }
+
+    // Tokenize the input string into commands separated by '|'
+    char *token = strtok(input_command, "|");
+    while (token != NULL && command_count < 10) {
+        commands[command_count] = token;
+        command_count++;
+        token = strtok(NULL, "|");
+    }
+
+    int pipefd[2];  // Array to hold pipe file descriptors
+    int previous_pipe_read = 0;  // File descriptor for reading from previous pipe
+
+    // Loop through all piped commands
+    for (int i = 0; i < command_count; i++) {
+        pipe(pipefd);  // Create a pipe
+        pid_t child_pid = fork();  // Fork a new process for each command
+
+        if (child_pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (child_pid == 0) {
+            // In child process
+            close(pipefd[0]);  // Close unused read end of the pipe
+
+            // If not the first command, redirect input from the previous command's pipe
+            if (i > 0) {
+                dup2(previous_pipe_read, STDIN_FILENO);
+                close(previous_pipe_read);
+            }
+            
+            // If not the last command, redirect output to the current pipe's write end
+            if (i < command_count - 1) {
+                dup2(pipefd[1], STDOUT_FILENO);
+            }
+            close(pipefd[1]);
+
+            // Split command into arguments
+            char *command = commands[i];
+            char *args[100];
+            int arg_count = 0;
+            char *arg = strtok(command, " ");
+            while (arg != NULL) {
+                args[arg_count] = arg;
+                arg_count++;
+                arg = strtok(NULL, " ");
+            }
+            args[arg_count] = NULL;
+
+            // Execute the command
+            execvp(args[0], args);
+            perror("execvp");  // Handle error in case execvp fails
+            exit(EXIT_FAILURE);
+        } else {
+            // In parent process
+            close(pipefd[1]);  // Close the write end of the current pipe
+            if (previous_pipe_read != 0) {
+                close(previous_pipe_read);  // Close the previous read end
+            }
+            previous_pipe_read = pipefd[0];  // Save the current read end for the next iteration
+
+            waitpid(child_pid, &status, 0);  // Wait for the child process to complete
+
+            // Log timing if the command executed successfully
+            if (WIFEXITED(status)) {
+                end_time = clock();
+                elapsed_time_ms = (double)(end_time - start_time) * 1000.0 / CLOCKS_PER_SEC;
+                FILE *file = fopen("history.txt", "a");
+                fprintf(file, "\nStart time: %ld\n", (long)start_time);
+                fprintf(file, "End time: %ld\n", (long)end_time);
+                fprintf(file, "Duration: %.2f ms\n", elapsed_time_ms);
+                fclose(file);
+            }
         }
-        Status++;
+    }
+    close(previous_pipe_read);  // Close the last remaining read end of the pipe
+}
+
+// Executes a single command
+void execute_single_command(char* command) {
+    pid_t pid;
+    int status;
+    clock_t start_time, end_time;
+    double elapsed_time_ms;
+
+    start_time = clock();  // Start measuring time
+
+    pid = fork();  // Fork a new process to execute the command
+    if (pid == 0) {
+        // In child process
+        char* args[1000];
+        int arg_count = 0;
+        char* token = strtok(command, " ");
+        if (token == NULL) {
+            fprintf(stderr, "Error: Empty command or tokenizing failed\n");
+            return;
+        }
+        
+        while (token != NULL) {
+            args[arg_count++] = token;
+            token = strtok(NULL, " ");
+        }
+        args[arg_count] = NULL;
+
+        execvp(args[0], args);  // Execute the command
+        perror("execvp");  // Handle execvp failure
+        exit(EXIT_FAILURE);
+    } else if (pid < 0) {
+        printf("Error in forking\n");
+    } else {
+        // In parent process
+        waitpid(pid, &status, 0);  // Wait for the child process to complete
+
+        // Log timing if the command executed successfully
+        if (WIFEXITED(status)) {
+            end_time = clock();
+            elapsed_time_ms = (double)(end_time - start_time) * 1000.0 / CLOCKS_PER_SEC;
+            FILE *file = fopen("history.txt", "a");
+            fprintf(file, "\nPID: %d\n", pid);
+            fprintf(file, "Start time: %ld\n", (long)start_time);
+            fprintf(file, "End time: %ld\n", (long)end_time);
+            fprintf(file, "Duration: %.2f ms\n", elapsed_time_ms);
+            fclose(file);
+        }
     }
 }
 
-int main()
-{
-    char input[MAX_INPUT_SIZE];        // To store user input
-    char command[MAX_INPUT_SIZE];      // To store the parsed command
-    char *args[MAX_ARGS];              // To store arguments for the command
-    clock_t start_time, end_time;      // Timing variables for command execution
-    double duration;                   // To store the duration of command execution
-    history command_history[MAX_INPUT_SIZE]; // Array to store command history
-    int history_count = 0;             // Number of commands in history
-    char *temp;
+// Signal handler for Ctrl+C
+void handle_ctrl_c(int signal) {
+    printf("\nDisplaying command history:\n");
+    display_history();
+    exit(EXIT_SUCCESS);
+}
 
-    while(1)
-    {
-        // Print the shell prompt and get user input
+int main(){
+    char input_command[1000];
+    
+    // Initialize or clear the history file
+    FILE *file = fopen("history.txt", "w");
+    fclose(file);
+
+    // Set up signal handling for Ctrl+C
+    signal(SIGINT, handle_ctrl_c);
+
+    while (1){
         printf("group50@SimpleShell $ ");
-        if (fgets(input, MAX_INPUT_SIZE, stdin) == NULL)
-        {
-            // Handle EOF (Ctrl+D)
-            break;
-        }
+        fgets(input_command, sizeof(input_command), stdin);  // Read user input
 
-        // Remove trailing newline character
-        input[strcspn(input, "\n")] = '\0';
-
-        // Check for pipe '|' in the input
-        if (strchr(input, '|') != NULL)
-        {
-            char *commands[32]; // To store the commands split by pipes
-            int cmd_count = 0;
-
-            // Tokenize the input based on pipes '|'
-            char *token = strtok(input, "|");
-            while (token != NULL && cmd_count < 32)
-            {
-                commands[cmd_count] = token;
-                cmd_count++;
-                token = strtok(NULL, "|");
-            }
-            commands[cmd_count] = NULL;  // Null-terminate the array of commands
-            calStatus();
-            int prev_pipe = STDIN_FILENO; // File descriptor for the previous pipe
-            int pipefd[2]; // Pipe file descriptors
-            while(1){
-                int cmd_Count = 50;
-                if(cmd_Count > 0){
-                    break;
-                }
-                cmd_Count++;
-            }
-            // Loop through all commands in the pipeline
-            for (int i = 0; i < cmd_count; i++)
-            {
-                char *raw_input = strdup(commands[i]); // Duplicate the command for history storage
-                pipe(pipefd); // Create a pipe
-                start_time = clock(); // Record start time of command
-                int pid = fork(); // Fork a new process for each command in the pipeline
-                end_time = clock();
-                duration = (double)(end_time - start_time);
-
-                if (pid == 0) // Child process
-                {
-                    close(pipefd[0]); // Close the read end of the pipe
-                    dup2(prev_pipe, STDIN_FILENO); // Redirect input from the previous command
-                    if (i < cmd_count - 1) // Redirect output to the pipe if not the last command
-                    {
-                        dup2(pipefd[1], STDOUT_FILENO);
-                    }
-                    close(prev_pipe);
-                    close(pipefd[1]);
-
-                    // Parse and execute the current command
-                    parse_input(commands[i], command, args);
-                    if (execvp(command, args) == -1) 
-                    {
-                        // Error in executing the command
-                        fprintf(stderr, "Error: Failed to execute command '%s'\n", command);
-                        perror("execvp");
-                        exit(EXIT_FAILURE);
-                    }
-                }
-                else if (pid == -1) // Error in fork
-                {
-                    fprintf(stderr, "Error: Fork failed while trying to create a new process.\n");
-                    perror("fork");
-                    exit(EXIT_FAILURE);
-                }
-                else // Parent process
-                {
-                    close(pipefd[1]); // Close the write end of the pipe
-                    prev_pipe = pipefd[0]; // Save the read end for the next command
-                }
-
-                // Store the command and its details in history if fork succeeded
-                if (pid != -1)
-                {
-                    history com;
-                    char *new_raw_input = strdup(raw_input);
-                    temp = strtok(raw_input, " ");
-                    com.command = strdup(temp);
-                    com.full_command = strdup(new_raw_input);
-                    com.end_time = end_time;
-                    com.pid = pid;
-                    com.start_time = start_time;
-                    com.duration = duration;
-                    command_history[history_count] = com;
-                    history_count++;
-                }
-            }
-
-            // Wait for all processes in the pipeline to complete
-            for (int i = 0; i < cmd_count; i++)
-            {
-                if (wait(NULL) == -1)
-                {
-                    perror("Error: Wait failed");
-                    break;
-                }
-            }
-        }
-
-        // Handle non-pipe commands
-        else
-        {
-            char *raw_input = strdup(input);
-            parse_input(input, command, args);
-
-            if (strcmp(command, "exit") == 0)
-            {
-                // Exit the shell if the user enters "exit"
+        // Remove newline character from input
+        for (int i = 0; input_command[i] != '\0'; i++) {
+            if (input_command[i] == '\n') {
+                input_command[i] = '\0';
                 break;
             }
+        }
 
-            if (strcmp(command, "history") == 0)
-            {
-                // Display the history of commands entered
-                for (int i = 0; i < history_count; i++)
-                {
-                    printf("Command: %s\n", command_history[i].command);
-                    printf("Arguments: %s\n", command_history[i].full_command);
-                    printf("\n");
-                }
-            }
-            else
-            {
-                start_time = clock(); // Record start time of the command
-                int status = launch_process(command); // Launch the command
-                end_time = clock();
-                duration = (double)(end_time - start_time);
-                calStatus();
-                // Handle child and parent processes
-                if (status == 0) // Child process
-                {
-                    if (execvp(command, args) == -1)
-                    {
-                        perror("execvp");
-                        exit(EXIT_FAILURE);
-                    }
-                }
-                else if (status == -1) // Fork failed
-                {
-                    perror("fork");
-                    exit(EXIT_FAILURE);
-                }
-                else // Parent process
-                {
-                    int parent_process_status;
-                    waitpid(status, &parent_process_status, 0);
-
-                    if (WIFEXITED(parent_process_status))
-                    {
-                        printf("Child process exited with status %d\n", WEXITSTATUS(parent_process_status));
-                    }
-
-                    // Store command in history
-                    if (status != -1)
-                    {
-                        history com;
-                        com.command = strdup(command);
-                        com.full_command = strdup(raw_input);
-                        com.end_time = end_time;
-                        com.pid = status;
-                        com.start_time = start_time;
-                        com.duration = duration;
-                        command_history[history_count] = com;
-                        history_count++;
-                    }
-                }
+        // Check if input contains pipe '|'
+        int contains_pipe = 0;
+        for(int i = 0; input_command[i] != '\0'; i++) {
+            if (input_command[i] == '|') {
+                execute_piped_commands(input_command);  // Handle piped commands
+                contains_pipe = 1;
+                break;
             }
         }
-        fflush(stdout); // Flush stdout buffer to ensure proper output
-    } 
 
-    // Print the final command history before exiting
-    printf("Exiting group50@SimpleShell\n\n");
-    for (int i = 0; i < history_count; i++)
-    {
-        printf("Command: %s\n", command_history[i].command);
-        printf("Arguments: %s\n", command_history[i].full_command);
-        printf("Pid: %i\n", command_history[i].pid);
-        printf("Start_Time: %ld\n", command_history[i].start_time);
-        printf("End_Time: %ld\n", command_history[i].end_time);
-        printf("Duration: %f\n", command_history[i].duration);
-        printf("\n");
+        // Handle regular commands and built-in functions
+        if (strcmp(input_command, "exit") == 0) {
+            display_history();
+            break;
+        } else if (strcmp(input_command, "history") == 0) {
+            display_history();
+        } else if (!contains_pipe) {
+            add_to_history(input_command);  // Add the command to history
+            execute_single_command(input_command);  // Execute the command
+        }
     }
+
     return 0;
 }
